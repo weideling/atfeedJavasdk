@@ -1,12 +1,9 @@
-package at.atserverapiexample;
+package stockanalysis.io;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.util.Iterator;
-import java.util.Vector;
-
+import at.feedapi.ActiveTickServerAPI;
+import at.feedapi.ActiveTickServerRequester;
 import at.feedapi.Helpers;
-import at.utils.jlib.PrintfFormat;
+import at.feedapi.Session;
 import at.shared.ATServerAPIDefines;
 import at.shared.ATServerAPIDefines.ATBarHistoryResponseType;
 import at.shared.ATServerAPIDefines.ATDataType;
@@ -21,22 +18,243 @@ import at.shared.ATServerAPIDefines.ATTickHistoryResponseType;
 import at.shared.ATServerAPIDefines.QuoteDbDataItem;
 import at.shared.ATServerAPIDefines.QuoteDbResponseItem;
 import at.shared.ATServerAPIDefines.SYSTEMTIME;
-import at.shared.ActiveTick.*;
+import at.shared.ActiveTick.DateTime;
+import at.shared.ActiveTick.UInt64;
+import at.utils.jlib.PrintfFormat;
+import com.google.common.base.Preconditions;
+import java.io.PrintStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.Iterator;
+import java.util.Vector;
+import java.util.concurrent.CountDownLatch;
+import javax.annotation.Nullable;
+import javax.annotation.concurrent.NotThreadSafe;
 
-public class Requestor extends at.feedapi.ActiveTickServerRequester {
-    public Requestor(APISession apiSession, Streamer streamer) {
-        super(apiSession.GetServerAPI(), apiSession.GetSession(), streamer);
+@NotThreadSafe
+public class Requestor extends ActiveTickServerRequester {
+
+    // best effort for visibility; no guarantee on thread-safety for the class;
+    // treat this as per request
+    private volatile PrintStream output = System.out;
+
+    // treat this as per request
+    @Nullable
+    private volatile CountDownLatch requestDone = null;
+
+    public Requestor(ActiveTickServerAPI server, Session session, Streamer streamer) {
+        super(server, session, streamer);
     }
 
+    public synchronized void setOutput(PrintStream output) {
+        this.output = output;
+    }
+
+    public PrintStream getOutput() {
+        return output;
+    }
+
+    @Nullable public CountDownLatch getRequestDone() {
+        return requestDone;
+    }
+
+    public void setRequestDone(CountDownLatch requestDone) {
+        this.requestDone = requestDone;
+    }
+
+    @Override
+    public void OnQuoteDbResponse(long origRequest, ATServerAPIDefines.ATQuoteDbResponseType responseType,
+                                  Vector<ATServerAPIDefines.QuoteDbResponseItem> vecData) {
+        String strResponseType = "";
+        switch (responseType.m_atQuoteDbResponseType) {
+            case ATQuoteDbResponseType.QuoteDbResponseSuccess:
+                strResponseType = "QuoteDbResponseSuccess";
+                break;
+            case ATQuoteDbResponseType.QuoteDbResponseInvalidRequest:
+                strResponseType = "QuoteDbResponseInvalidRequest";
+                break;
+            case ATQuoteDbResponseType.QuoteDbResponseDenied:
+                strResponseType = "QuoteDbResponseDenied";
+                break;
+        }
+        System.out.println("RECV (" + origRequest + "): QuoteDb response " + strResponseType +
+                "\n-------------------------------------------------------------------------");
+
+        Iterator<QuoteDbResponseItem> itr = vecData.iterator();
+        String strSymbolStatus = "";
+        while (itr.hasNext()) {
+            QuoteDbResponseItem responseItem = itr.next();
+            switch (responseItem.m_atResponse.status.m_atSymbolStatus) {
+                case ATSymbolStatus.SymbolStatusSuccess:
+                    strSymbolStatus = "SymbolStatusSuccess";
+                    break;
+                case ATSymbolStatus.SymbolStatusInvalid:
+                    strSymbolStatus = "SymbolStatusInvalid";
+                    break;
+                case ATSymbolStatus.SymbolStatusUnavailable:
+                    strSymbolStatus = "SymbolStatusUnavailable";
+                    break;
+                case ATSymbolStatus.SymbolStatusNoPermission:
+                    strSymbolStatus = "SymbolStatusNoPermission";
+                    break;
+            }
+            String strItemSymbol = new String(responseItem.m_atResponse.symbol.symbol);
+            int plainItemSymbolIndex = strItemSymbol.indexOf((byte) 0);
+            strItemSymbol = strItemSymbol.substring(0, plainItemSymbolIndex);
+
+            System.out.println("\tsymbol: [" + strItemSymbol + "] symbolStatus: " + strSymbolStatus);
+
+            Iterator<QuoteDbDataItem> itrDataItems = responseItem.m_vecDataItems.iterator();
+            while (responseItem.m_atResponse.status.m_atSymbolStatus == ATSymbolStatus.SymbolStatusSuccess && itrDataItems.hasNext()) {
+                QuoteDbDataItem dataItem = (QuoteDbDataItem) itrDataItems.next();
+                String strData = "";
+                byte[] intBytes = new byte[4];
+                byte[] longBytes = new byte[8];
+
+                switch (dataItem.m_dataItem.dataType.m_atDataType) {
+                    case ATDataType.Byte:
+                        strData = new String(dataItem.GetItemData());
+                        break;
+                    case ATDataType.ByteArray:
+                        strData = "byte data";
+                        break;
+                    case ATDataType.UInteger32: {
+                        System.arraycopy(dataItem.GetItemData(), 0, intBytes, 0, 4);
+                        int nData = ByteBuffer.wrap(intBytes).order(ByteOrder.LITTLE_ENDIAN).getInt();
+                        strData = Integer.toString(nData);
+                    }
+                    break;
+                    case ATDataType.UInteger64: {
+                        System.arraycopy(dataItem.GetItemData(), 0, longBytes, 0, 8);
+                        long nData = ByteBuffer.wrap(longBytes).order(ByteOrder.LITTLE_ENDIAN).getLong();
+                        strData = Long.toString(nData);
+                    }
+                    break;
+                    case ATDataType.Integer32: {
+                        System.arraycopy(dataItem.GetItemData(), 0, intBytes, 0, 4);
+                        int nData = ByteBuffer.wrap(intBytes).order(ByteOrder.LITTLE_ENDIAN).getInt();
+                        strData = Integer.toString(nData);
+                    }
+                    break;
+                    case ATDataType.Integer64: {
+                        System.arraycopy(dataItem.GetItemData(), 0, longBytes, 0, 8);
+                        long nData = ByteBuffer.wrap(longBytes).order(ByteOrder.LITTLE_ENDIAN).getLong();
+                        strData = Long.toString(nData);
+                    }
+                    break;
+                    case ATDataType.Price: {
+                        ATServerAPIDefines.ATPRICE price = Helpers.BytesToPrice(dataItem.GetItemData());
+                        strData = Double.toString(price.price);
+                    }
+                    break;
+                    case ATDataType.String: {
+                        strData = new String(dataItem.GetItemData());
+                    }
+                    break;
+                    case ATDataType.UnicodeString: {
+                        strData = new String(dataItem.GetItemData());
+                    }
+                    break;
+                    case ATDataType.DateTime: {
+                        UInt64 li = new UInt64(dataItem.GetItemData());
+                        SYSTEMTIME dateTime = DateTime.GetDateTime(li);
+                        StringBuilder sb = new StringBuilder();
+                        sb.append(dateTime.month);
+                        sb.append("/");
+                        sb.append(dateTime.day);
+                        sb.append("/");
+                        sb.append(dateTime.year);
+                        sb.append(" ");
+                        sb.append(dateTime.hour);
+                        sb.append(":");
+                        sb.append(dateTime.minute);
+                        sb.append(":");
+                        sb.append(dateTime.second);
+                        strData = sb.toString();
+                    }
+                    break;
+                    default:
+                        // nothing
+                }
+
+                StringBuilder sb = new StringBuilder();
+                sb.append("\tATQuoteFieldType:" + dataItem.m_dataItem.fieldType.m_atQuoteFieldType + "\n");
+                sb.append("\tATFieldStatus:" + dataItem.m_dataItem.fieldStatus.m_atFieldStatus + "\n");
+                sb.append("\tATDataType:" + dataItem.m_dataItem.dataType.m_atDataType + "\n");
+                sb.append("\tData:" + strData);
+                System.out.println(sb.toString());
+            }
+            System.out.println("\t-------------------------------------");
+        }
+    }
+
+    @Override
     public void OnRequestTimeoutCallback(long origRequest) {
         System.out.println("(" + origRequest + "): Request timed-out");
     }
 
-    public void OnBarHistoryDbResponse(long origRequest, ATServerAPIDefines.ATBarHistoryResponseType responseType, Vector<ATServerAPIDefines.ATBARHISTORY_RECORD> vecData) {
+    @Override
+    public void OnQuoteStreamResponse(long origRequest, ATServerAPIDefines.ATStreamResponseType responseType,
+                                      Vector<ATServerAPIDefines.ATQUOTESTREAM_DATA_ITEM> vecData) {
         String strResponseType = "";
+        switch (responseType.m_responseType) {
+            case ATStreamResponseType.StreamResponseSuccess:
+                strResponseType = "StreamResponseSuccess";
+                break;
+            case ATStreamResponseType.StreamResponseInvalidRequest:
+                strResponseType = "StreamResponseInvalidRequest";
+                break;
+            case ATStreamResponseType.StreamResponseDenied:
+                strResponseType = "StreamResponseDenied";
+                break;
+            default:
+                break;
+        }
+
+        System.out.println("RECV (" + origRequest + "): Quote stream response [" + strResponseType +
+                "]\n--------------------------------------------------------------");
+
+        if (responseType.m_responseType == ATStreamResponseType.StreamResponseSuccess) {
+            String strSymbolStatus = "";
+            Iterator<ATServerAPIDefines.ATQUOTESTREAM_DATA_ITEM> itrDataItems = vecData.iterator();
+            while (itrDataItems.hasNext()) {
+                ATServerAPIDefines.ATQUOTESTREAM_DATA_ITEM atDataItem = (ATServerAPIDefines.ATQUOTESTREAM_DATA_ITEM) itrDataItems.next();
+                switch (atDataItem.symbolStatus.m_atSymbolStatus) {
+                    case ATSymbolStatus.SymbolStatusSuccess:
+                        strSymbolStatus = "SymbolStatusSuccess";
+                        break;
+                    case ATSymbolStatus.SymbolStatusInvalid:
+                        strSymbolStatus = "SymbolStatusInvalid";
+                        break;
+                    case ATSymbolStatus.SymbolStatusUnavailable:
+                        strSymbolStatus = "SymbolStatusUnavailable";
+                        break;
+                    case ATSymbolStatus.SymbolStatusNoPermission:
+                        strSymbolStatus = "SymbolStatusNoPermission";
+                        break;
+                    default:
+                        break;
+                }
+
+                System.out.println("\tsymbol:" + strSymbolStatus + " symbolStatus: " + strSymbolStatus);
+            }
+        }
+    }
+
+    @Override
+    public void OnBarHistoryDbResponse(long origRequest,
+                                       ATServerAPIDefines.ATBarHistoryResponseType responseType,
+                                       Vector<ATServerAPIDefines.ATBARHISTORY_RECORD> vecData) {
+
+        final PrintStream localOutput = getOutput(); // remember this output stream in case it is reset by other thread.
+        final CountDownLatch isThisRequestDone = getRequestDone();
+
+        final String strResponseType;
+        boolean success = false;
         switch (responseType.m_responseType) {
             case ATBarHistoryResponseType.BarHistoryResponseSuccess:
                 strResponseType = "BarHistoryResponseSuccess";
+                success = true;
                 break;
             case ATBarHistoryResponseType.BarHistoryResponseInvalidRequest:
                 strResponseType = "BarHistoryResponseInvalidRequest";
@@ -48,42 +266,30 @@ public class Requestor extends at.feedapi.ActiveTickServerRequester {
                 strResponseType = "BarHistoryResponseDenied";
                 break;
             default:
-                break;
+                strResponseType = "Unrecognized response type: " + responseType.m_responseType;
         }
 
-        System.out.println("RECV (" + origRequest + "): Bar History response [" + strResponseType + "]\n--------------------------------------------------------------");
+        System.out.println("RECV (" + origRequest + "): Bar History response [" + strResponseType +
+                "]");
+        Preconditions.checkState(success); // fail fast
+        vecData.forEach(record -> localOutput.println(BarHistoryRecordFormatter.print(record)));
 
-        Iterator<ATServerAPIDefines.ATBARHISTORY_RECORD> itrDataItems = vecData.iterator();
-        int index = 0;
-        int recCount = vecData.size();
-        String strFormat = "%0.2f";
-        while (itrDataItems.hasNext()) {
-            ATServerAPIDefines.ATBARHISTORY_RECORD record = (ATServerAPIDefines.ATBARHISTORY_RECORD) itrDataItems.next();
-            StringBuilder sb = new StringBuilder();
-            sb.append((++index) + "/" + recCount + " ");
-            sb.append("[" + record.barTime.month + "/" + record.barTime.day + "/" + record.barTime.year + " ");
-            sb.append(record.barTime.hour + ":" + record.barTime.minute + ":" + record.barTime.second + "] ");
-
-
-            strFormat = "%0." + record.open.precision + "f";
-            sb.append("  \t[o:" + new PrintfFormat(strFormat).sprintf(record.open.price));
-
-            strFormat = "%0." + record.high.precision + "f";
-            sb.append("  \th:" + new PrintfFormat(strFormat).sprintf(record.high.price) + " ");
-
-            strFormat = "%0." + record.low.precision + "f";
-            sb.append("  \tl:" + new PrintfFormat(strFormat).sprintf(record.low.price) + " ");
-
-            strFormat = "%0." + record.close.precision + "f";
-            sb.append("  \tc:" + new PrintfFormat(strFormat).sprintf(record.close.price) + " ");
-
-            sb.append("  \tvol:" + record.volume);
-
-            System.out.println(sb.toString());
+        /*
+        try (PrintStream mysteram = new PrintStream("/tmp/stock/CSCO/20100101000000-20100401010000.csv.csv")) {
+            vecData.forEach(record -> mysteram.println(BarHistoryRecordFormatter.print(record)));
+            mysteram.println("mmmm");
+        } catch (Exception e) {
+            e.printStackTrace();
         }
-        System.out.println("--------------------------------------------------------------\nTotal records:" + recCount);
+        */
+
+        System.out.println("Total records:" + vecData.size());
+        if (isThisRequestDone != null) {
+            isThisRequestDone.countDown();
+        }
     }
 
+    @Override
     public void OnTickHistoryDbResponse(long origRequest, ATServerAPIDefines.ATTickHistoryResponseType responseType, Vector<ATServerAPIDefines.ATTICKHISTORY_RECORD> vecData) {
         String strResponseType = "";
         switch (responseType.m_responseType) {
@@ -164,6 +370,7 @@ public class Requestor extends at.feedapi.ActiveTickServerRequester {
         System.out.println("--------------------------------------------------------------\nTotal records:" + recCount);
     }
 
+    @Override
     public void OnMarketHolidaysResponse(long origRequest, Vector<ATServerAPIDefines.ATMARKET_HOLIDAYSLIST_ITEM> vecData) {
         System.out.println("RECV (" + origRequest + "): MarketHolidays response \n--------------------------------------------------------------");
         Iterator<ATServerAPIDefines.ATMARKET_HOLIDAYSLIST_ITEM> itrDataItems = vecData.iterator();
@@ -193,17 +400,7 @@ public class Requestor extends at.feedapi.ActiveTickServerRequester {
         System.out.println("--------------------------------------------------------------\nTotal records:" + recCount);
     }
 
-    public void OnConstituentListResponse(long origRequest, Vector<ATServerAPIDefines.ATSYMBOL> vecData) {
-        String strResponseType = "";
-
-        for (int i = 0; i < vecData.size(); ++i) {
-            String symbol = Helpers.SymbolToString(vecData.elementAt(i));
-            strResponseType += symbol + "\n";
-        }
-
-        System.out.println("RECV (" + origRequest + "): Constituent list response [ " + strResponseType + "]\n--------------------------------------------------------------");
-    }
-
+    @Override
     public void OnMarketMoversDbResponse(long origRequest, ATServerAPIDefines.ATMarketMoversDbResponseType responseType, Vector<ATServerAPIDefines.ATMARKET_MOVERS_RECORD> vecData) {
         String strResponseType = "";
         switch (responseType.m_responseType) {
@@ -262,6 +459,7 @@ public class Requestor extends at.feedapi.ActiveTickServerRequester {
         }
     }
 
+    @Override
     public void OnMarketMoversStreamResponse(long origRequest, ATServerAPIDefines.ATStreamResponseType responseType, ATServerAPIDefines.ATMARKET_MOVERS_STREAM_RESPONSE response) {
         String strResponseType = "";
         switch (responseType.m_responseType) {
@@ -280,171 +478,15 @@ public class Requestor extends at.feedapi.ActiveTickServerRequester {
         System.out.println("RECV (" + origRequest + "): Market Movers response [ " + strResponseType + "]\n--------------------------------------------------------------");
     }
 
-    public void OnQuoteDbResponse(long origRequest, ATServerAPIDefines.ATQuoteDbResponseType responseType, Vector<ATServerAPIDefines.QuoteDbResponseItem> vecData) {
+    @Override
+    public void OnConstituentListResponse(long origRequest, Vector<ATServerAPIDefines.ATSYMBOL> vecData) {
         String strResponseType = "";
-        switch (responseType.m_atQuoteDbResponseType) {
-            case ATQuoteDbResponseType.QuoteDbResponseSuccess:
-                strResponseType = "QuoteDbResponseSuccess";
-                break;
-            case ATQuoteDbResponseType.QuoteDbResponseInvalidRequest:
-                strResponseType = "QuoteDbResponseInvalidRequest";
-                break;
-            case ATQuoteDbResponseType.QuoteDbResponseDenied:
-                strResponseType = "QuoteDbResponseDenied";
-                break;
-        }
-        System.out.println("RECV (" + origRequest + "): QuoteDb response " + strResponseType + "\n-------------------------------------------------------------------------");
 
-        Iterator<QuoteDbResponseItem> itr = vecData.iterator();
-        String strSymbolStatus = "";
-        while (itr.hasNext()) {
-            QuoteDbResponseItem responseItem = (QuoteDbResponseItem) itr.next();
-            switch (responseItem.m_atResponse.status.m_atSymbolStatus) {
-                case ATSymbolStatus.SymbolStatusSuccess:
-                    strSymbolStatus = "SymbolStatusSuccess";
-                    break;
-                case ATSymbolStatus.SymbolStatusInvalid:
-                    strSymbolStatus = "SymbolStatusInvalid";
-                    break;
-                case ATSymbolStatus.SymbolStatusUnavailable:
-                    strSymbolStatus = "SymbolStatusUnavailable";
-                    break;
-                case ATSymbolStatus.SymbolStatusNoPermission:
-                    strSymbolStatus = "SymbolStatusNoPermission";
-                    break;
-            }
-            String strItemSymbol = new String(responseItem.m_atResponse.symbol.symbol);
-            int plainItemSymbolIndex = strItemSymbol.indexOf((byte) 0);
-            strItemSymbol = strItemSymbol.substring(0, plainItemSymbolIndex);
-
-            System.out.println("\tsymbol: [" + strItemSymbol + "] symbolStatus: " + strSymbolStatus);
-
-            Iterator<QuoteDbDataItem> itrDataItems = responseItem.m_vecDataItems.iterator();
-            while (responseItem.m_atResponse.status.m_atSymbolStatus == ATSymbolStatus.SymbolStatusSuccess && itrDataItems.hasNext()) {
-                QuoteDbDataItem dataItem = (QuoteDbDataItem) itrDataItems.next();
-                String strData = "";
-                byte[] intBytes = new byte[4];
-                byte[] longBytes = new byte[8];
-
-                switch (dataItem.m_dataItem.dataType.m_atDataType) {
-                    case ATDataType.Byte:
-                        strData = new String(dataItem.GetItemData());
-                        break;
-                    case ATDataType.ByteArray:
-                        strData = new String("byte data");
-                        break;
-                    case ATDataType.UInteger32: {
-                        System.arraycopy(dataItem.GetItemData(), 0, intBytes, 0, 4);
-                        int nData = ByteBuffer.wrap(intBytes).order(ByteOrder.LITTLE_ENDIAN).getInt();
-                        strData = new String("" + nData);
-                    }
-                    break;
-                    case ATDataType.UInteger64: {
-                        System.arraycopy(dataItem.GetItemData(), 0, longBytes, 0, 8);
-                        long nData = ByteBuffer.wrap(longBytes).order(ByteOrder.LITTLE_ENDIAN).getLong();
-                        strData = new String("" + nData);
-                    }
-                    break;
-                    case ATDataType.Integer32: {
-                        System.arraycopy(dataItem.GetItemData(), 0, intBytes, 0, 4);
-                        int nData = ByteBuffer.wrap(intBytes).order(ByteOrder.LITTLE_ENDIAN).getInt();
-                        strData = new String("" + nData);
-                    }
-                    break;
-                    case ATDataType.Integer64: {
-                        System.arraycopy(dataItem.GetItemData(), 0, longBytes, 0, 8);
-                        long nData = ByteBuffer.wrap(longBytes).order(ByteOrder.LITTLE_ENDIAN).getLong();
-                        strData = new String("" + nData);
-                    }
-                    break;
-                    case ATDataType.Price: {
-                        ATServerAPIDefines.ATPRICE price = Helpers.BytesToPrice(dataItem.GetItemData());
-                        strData = "" + price.price;
-                    }
-                    break;
-                    case ATDataType.String: {
-                        strData = new String(dataItem.GetItemData());
-                    }
-                    break;
-                    case ATDataType.UnicodeString: {
-                        strData = new String(dataItem.GetItemData());
-                    }
-                    break;
-                    case ATDataType.DateTime: {
-                        UInt64 li = new UInt64(dataItem.GetItemData());
-                        SYSTEMTIME dateTime = DateTime.GetDateTime(li);
-                        StringBuilder sb = new StringBuilder();
-                        sb.append(dateTime.month);
-                        sb.append("/");
-                        sb.append(dateTime.day);
-                        sb.append("/");
-                        sb.append(dateTime.year);
-                        sb.append(" ");
-                        sb.append(dateTime.hour);
-                        sb.append(":");
-                        sb.append(dateTime.minute);
-                        sb.append(":");
-                        sb.append(dateTime.second);
-                        strData = sb.toString();
-                    }
-                    break;
-                    default:
-                        break;
-                }
-
-                StringBuilder sb = new StringBuilder();
-                sb.append("\tATQuoteFieldType:" + dataItem.m_dataItem.fieldType.m_atQuoteFieldType + "\n");
-                sb.append("\tATFieldStatus:" + dataItem.m_dataItem.fieldStatus.m_atFieldStatus + "\n");
-                sb.append("\tATDataType:" + dataItem.m_dataItem.dataType.m_atDataType + "\n");
-                sb.append("\tData:" + strData);
-                System.out.println(sb.toString());
-            }
-            System.out.println("\t-------------------------------------");
-        }
-    }
-
-    public void OnQuoteStreamResponse(long origRequest, ATServerAPIDefines.ATStreamResponseType responseType, Vector<ATServerAPIDefines.ATQUOTESTREAM_DATA_ITEM> vecData) {
-        String strResponseType = "";
-        switch (responseType.m_responseType) {
-            case ATStreamResponseType.StreamResponseSuccess:
-                strResponseType = "StreamResponseSuccess";
-                break;
-            case ATStreamResponseType.StreamResponseInvalidRequest:
-                strResponseType = "StreamResponseInvalidRequest";
-                break;
-            case ATStreamResponseType.StreamResponseDenied:
-                strResponseType = "StreamResponseDenied";
-                break;
-            default:
-                break;
+        for (int i = 0; i < vecData.size(); ++i) {
+            String symbol = Helpers.SymbolToString(vecData.elementAt(i));
+            strResponseType += symbol + "\n";
         }
 
-        System.out.println("RECV (" + origRequest + "): Quote stream response [" + strResponseType + "]\n--------------------------------------------------------------");
-
-        if (responseType.m_responseType == ATStreamResponseType.StreamResponseSuccess) {
-            String strSymbolStatus = "";
-            Iterator<ATServerAPIDefines.ATQUOTESTREAM_DATA_ITEM> itrDataItems = vecData.iterator();
-            while (itrDataItems.hasNext()) {
-                ATServerAPIDefines.ATQUOTESTREAM_DATA_ITEM atDataItem = (ATServerAPIDefines.ATQUOTESTREAM_DATA_ITEM) itrDataItems.next();
-                switch (atDataItem.symbolStatus.m_atSymbolStatus) {
-                    case ATSymbolStatus.SymbolStatusSuccess:
-                        strSymbolStatus = "SymbolStatusSuccess";
-                        break;
-                    case ATSymbolStatus.SymbolStatusInvalid:
-                        strSymbolStatus = "SymbolStatusInvalid";
-                        break;
-                    case ATSymbolStatus.SymbolStatusUnavailable:
-                        strSymbolStatus = "SymbolStatusUnavailable";
-                        break;
-                    case ATSymbolStatus.SymbolStatusNoPermission:
-                        strSymbolStatus = "SymbolStatusNoPermission";
-                        break;
-                    default:
-                        break;
-                }
-
-                System.out.println("\tsymbol:" + strSymbolStatus + " symbolStatus: " + strSymbolStatus);
-            }
-        }
+        System.out.println("RECV (" + origRequest + "): Constituent list response [ " + strResponseType + "]\n--------------------------------------------------------------");
     }
 }

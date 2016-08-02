@@ -1,29 +1,29 @@
-package at.atserverapiexample;
+package stockanalysis.io;
 
-import java.util.HashMap;
-import java.util.Map;
-
-import at.feedapi.ActiveTickServerAPI;
 import at.feedapi.ActiveTickStreamListener;
-import at.feedapi.Session;
 import at.shared.ATServerAPIDefines;
-import at.shared.ATServerAPIDefines.ATGUID;
 import at.utils.jlib.PrintfFormat;
 
+/**
+ * Stream that gets update.
+ * Doesn't do much. Just print updates.
+ */
 public class Streamer extends ActiveTickStreamListener {
-    APISession m_session;
+
+    private final APISession apiSession;
 
     public Streamer(APISession session) {
         super(session.GetSession(), false);
-        m_session = session;
+        apiSession = session;
     }
 
+    @Override
     public void OnATStreamTradeUpdate(ATServerAPIDefines.ATQUOTESTREAM_TRADE_UPDATE update) {
         String strSymbol = new String(update.symbol.symbol);
         int plainSymbolIndex = strSymbol.indexOf((byte) 0);
         strSymbol = strSymbol.substring(0, plainSymbolIndex);
 
-        StringBuffer sb = new StringBuffer();
+        StringBuilder sb = new StringBuilder();
         sb.append("[");
         sb.append(update.lastDateTime.hour);
         sb.append(":");
@@ -44,11 +44,12 @@ public class Streamer extends ActiveTickStreamListener {
         System.out.println(sb.toString());
     }
 
+    @Override
     public void OnATStreamQuoteUpdate(ATServerAPIDefines.ATQUOTESTREAM_QUOTE_UPDATE update) {
         String strSymbol = new String(update.symbol.symbol);
         int plainSymbolIndex = strSymbol.indexOf((byte) 0);
         strSymbol = strSymbol.substring(0, plainSymbolIndex);
-        StringBuffer sb = new StringBuffer();
+        StringBuilder sb = new StringBuilder();
         sb.append("[");
         sb.append(update.quoteDateTime.hour);
         sb.append(":");
@@ -73,11 +74,12 @@ public class Streamer extends ActiveTickStreamListener {
         System.out.println(sb.toString());
     }
 
+    @Override
     public void OnATStreamTopMarketMoversUpdate(ATServerAPIDefines.ATMARKET_MOVERS_STREAM_UPDATE update) {
         String strSymbol = new String(update.marketMovers.symbol.symbol);
         int plainSymbolIndex = strSymbol.indexOf((byte) 0);
         strSymbol = strSymbol.substring(0, plainSymbolIndex);
-        StringBuffer sb = new StringBuffer();
+        StringBuilder sb = new StringBuilder();
         sb.append("RECV: [");
         sb.append(update.lastUpdateTime.hour);
         sb.append(":");
@@ -91,7 +93,6 @@ public class Streamer extends ActiveTickStreamListener {
         sb.append("]");
         System.out.println(sb.toString());
 
-        String strFormat = "";
         for (int i = 0; i < update.marketMovers.items.length; i++) {
             StringBuilder sb2 = new StringBuilder();
             String strItemSymbol = new String(update.marketMovers.items[i].symbol.symbol);
@@ -101,9 +102,8 @@ public class Streamer extends ActiveTickStreamListener {
             sb2.append("symbol:");
             sb2.append(strItemSymbol);
 
-            strFormat = "%0." + update.marketMovers.items[i].lastPrice.precision + "f";
+            String strFormat = "%0." + update.marketMovers.items[i].lastPrice.precision + "f";
             sb2.append("  \t[last:" + new PrintfFormat(strFormat).sprintf(update.marketMovers.items[i].lastPrice.price));
-
             sb2.append(" volume:");
             sb2.append(update.marketMovers.items[i].volume);
             System.out.println(sb2.toString());

@@ -1,4 +1,4 @@
-package at.atserverapiexample;
+package stockanalysis.io;
 
 import at.feedapi.ATCallback;
 import at.feedapi.ActiveTickServerAPI;
@@ -17,70 +17,69 @@ import at.shared.ATServerAPIDefines.ATLOGIN_RESPONSE;
 import at.shared.ATServerAPIDefines.SYSTEMTIME;
 
 public class APISession extends ATCallback implements
-        ATLoginResponseCallback, ATServerTimeUpdateCallback, ATRequestTimeoutCallback, ATSessionStatusChangeCallback, ATOutputMessageCallback
+        ATLoginResponseCallback, ATServerTimeUpdateCallback, ATRequestTimeoutCallback, ATSessionStatusChangeCallback, ATOutputMessageCallback {
 
-{
-    at.feedapi.Session m_session;
-    ActiveTickServerAPI m_serverapi;
-    Requestor m_requestor;
-    Streamer m_streamer;
+    private Session session;
+    private ActiveTickServerAPI server;
+    private Requestor requestor;
+    private Streamer streamer;
 
-    long m_lastRequest;
-    String m_userid;
-    String m_password;
-    ATGUID m_apiKey;
+    private long lastRequest;
+    private String userid;
+    private String password;
+    private ATGUID apiKey;
 
     public APISession(ActiveTickServerAPI serverapi) {
-        m_serverapi = serverapi;
+        server = serverapi;
     }
 
     public ActiveTickServerAPI GetServerAPI() {
-        return m_serverapi;
+        return server;
     }
 
-    public at.feedapi.Session GetSession() {
-        return m_session;
+    public Session GetSession() {
+        return session;
     }
 
     public Streamer GetStreamer() {
-        return m_streamer;
+        return streamer;
     }
 
     public Requestor GetRequestor() {
-        return m_requestor;
+        return requestor;
     }
 
     public boolean Init(ATGUID apiKey, String serverHostname, int serverPort, String userId, String password) {
-        if (m_session != null)
-            m_serverapi.ATShutdownSession(m_session);
+        if (session != null)
+            server.ATShutdownSession(session);
 
-        m_session = m_serverapi.ATCreateSession();
-        m_streamer = new Streamer(this);
-        m_requestor = new Requestor(this, m_streamer);
+        session = server.ATCreateSession();
+        streamer = new Streamer(this);
+        requestor = new Requestor(server, session, streamer);
 
-        m_userid = userId;
-        m_password = password;
-        m_apiKey = apiKey;
+        userid = userId;
+        this.password = password;
+        this.apiKey = apiKey;
 
-        long rc = m_serverapi.ATSetAPIKey(m_session, m_apiKey);
+        long rc = server.ATSetAPIKey(session, this.apiKey);
 
-        m_session.SetServerTimeUpdateCallback(this);
-        m_session.SetOutputMessageCallback(this);
+        session.SetServerTimeUpdateCallback(this);
+        session.SetOutputMessageCallback(this);
 
         boolean initrc = false;
         if (rc == Errors.ERROR_SUCCESS)
-            initrc = m_serverapi.ATInitSession(m_session, serverHostname, serverHostname, serverPort, this);
+            initrc = server.ATInitSession(session, serverHostname, serverHostname, serverPort, this);
 
-        System.out.println(m_serverapi.GetAPIVersionInformation());
+        System.out.println(server.GetAPIVersionInformation());
         System.out.println("--------------------------------------------------------------------");
 
         return initrc;
     }
 
     public boolean UnInit() {
-        if (m_session != null) {
-            m_serverapi.ATShutdownSession(m_session);
-            m_session = null;
+        if (session != null) {
+            server.ATShutdownSession(session);
+            session = null;
         }
 
         return true;
@@ -126,7 +125,7 @@ public class APISession extends ATCallback implements
     }
 
     //ATSessionStatusChangeCallback
-    public void process(at.feedapi.Session session, ATServerAPIDefines.ATSessionStatusType type) {
+    public void process(Session session, ATServerAPIDefines.ATSessionStatusType type) {
         String strStatusType = "";
         switch (type.m_atSessionStatusType) {
             case ATServerAPIDefines.ATSessionStatusType.SessionStatusConnected:
@@ -146,10 +145,10 @@ public class APISession extends ATCallback implements
 
         //if we are connected to the server, send a login request
         if (type.m_atSessionStatusType == ATServerAPIDefines.ATSessionStatusType.SessionStatusConnected) {
-            m_lastRequest = m_serverapi.ATCreateLoginRequest(session, m_userid, m_password, this);
-            boolean rc = m_serverapi.ATSendRequest(session, m_lastRequest, ActiveTickServerAPI.DEFAULT_REQUEST_TIMEOUT, this);
+            lastRequest = server.ATCreateLoginRequest(session, userid, password, this);
+            boolean rc = server.ATSendRequest(session, lastRequest, ActiveTickServerAPI.DEFAULT_REQUEST_TIMEOUT, this);
 
-            System.out.println("SEND (" + m_lastRequest + "): Login request [" + m_userid + "] (rc = " + (char) Helpers.ConvertBooleanToByte(rc) + ")");
+            System.out.println("SEND (" + lastRequest + "): Login request [" + userid + "] (rc = " + (char) Helpers.ConvertBooleanToByte(rc) + ")");
         }
     }
 
