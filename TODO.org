@@ -1,0 +1,8 @@
+* short term
+** TODO refactor batch download to downLoader class;
+** TODO auto-merge output files into a single one
+** TODO in main just provide a list of stocks to download
+
+
+* midterm
+** explore better (free) storage for files. 
