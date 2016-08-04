@@ -69,8 +69,6 @@ public class DataDownloader {
         server.ATShutdownAPI();
     }
 
-
-    // use stream
     public void getIntradayHistoryBars(String symbol,
                                        ReadableInstant start,
                                        ReadableInstant end,
